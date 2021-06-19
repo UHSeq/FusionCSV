@@ -4,6 +4,7 @@ from zipfile import ZipFile
 import pandas
 import openpyxl
 from datetime import datetime
+# import time
 
 cwd = os.getcwd()
 now = datetime.now()
@@ -19,7 +20,7 @@ fusion_sheet = 'Total Fusions'
 zip_files = []
 csv_files = set()
 csv_objs = {}
-
+outter_fusion_class = {}
 
 class CSVFiles():
     def __init__(self, path):
@@ -27,33 +28,35 @@ class CSVFiles():
         _, self.name = os.path.split(self.path)
         self.name, _ = os.path.splitext(self.name)
         self.read_data()
-        self.find_groups()
-        self.process_groups()
+        # self.find_groups()
+        self.isolate_uniques()
 
     def read_data(self):
         self.data = pandas.read_csv(self.path)
 
     def find_groups(self):
-        self.groupby = self.data.groupby(['Name'])
-        self.size = self.groupby.size()
-        self.size = dict(self.size)
-        self.data.insert(loc=count_col, column='Counts', value=0)
+        self.groupby = pandas.DataFrame(self.data.groupby(['Name']))
+        self.groupby.to_csv(os.path.join(cwd, csv_hold, self.name + "_dump.csv"))
 
-    
-    def process_groups(self):
-        for index, name in enumerate(self.data['Name']):
-            self.data.iat[index, count_col] = self.size[name]
-
+    def isolate_uniques(self):
+        self.unique_fusions = self.data.drop_duplicates(subset=['Name'])
+        self.unique_fusions = self.unique_fusions['Name']
+        self.unique_fusions = pandas.DataFrame(self.unique_fusions)
+        self.unique_fusions.insert(loc=1, column=self.name, value=1)
 
 class MasterData():
     def __init__(self, path):
         self.path = path
         self.create_excel()
         self.csv_files = {}
-        self.fusions = {}
+        self.fusions = pandas.DataFrame()
         self.csv_dict()
         self.fusion_count()
-        self.print2excel()
+        with pandas.ExcelWriter(self.path, mode='a', engine='openpyxl') as Excel_file:
+            self.print2excel(Excel_file, fusion_sheet, self.fusions)
+            for csv in self.csv_files.values():
+                self.print2excel(Excel_file, csv.name, csv.data)
+        self.remove_sheet()
 
     def csv_dict(self):
         for index, csv in enumerate(csv_files, 1):
@@ -72,21 +75,32 @@ class MasterData():
         self.wso = self.workbook['Sheet']
         self.wso.title = fusion_sheet
         self.workbook.save(self.path)
-
+        # Would prefer to rename and use the sheet as opposed to just deleting it
+        # but for some reason this doesn't working that way. Keeping it in anyway.
+    
     def fusion_count(self):
-        for csv in self.csv_files.values():
-            self.fusions[csv.name] = csv.size
-        self.fusions = pandas.DataFrame.from_dict(self.fusions)
-        self.fusions.sort_index(inplace=True)
+        for index, csv in self.csv_files.items():
+            if index == 1:
+                self.fusions = csv.unique_fusions
+            else:
+                self.fusions = pandas.merge(self.fusions, csv.unique_fusions, how='outer')
+        self.fusions = self.fusions.set_index('Name')
         self.fusions.insert(0, 'Total Occurance', self.fusions.sum(axis=1))
 
-    def print2excel(self):
-        with pandas.ExcelWriter(self.path, engine="openpyxl", mode='a') as Excel_File:
-            self.fusions.to_excel(Excel_File, fusion_sheet)
-            for csv in self.csv_files.values():
-                csv.data.to_excel(Excel_File, csv.name)
-        self.remove_sheet()
-        
+    def print2excel(self, excel_obj, excel_sheet, input_obj):
+        input_obj.to_excel(excel_obj, excel_sheet)
+
+    # def print_excel_sheet(self, excel_output, obj, sheet_name):
+    #     print(f"Printing to excel data set {sheet_name}")
+    #     startime = time.time()
+    #     with pandas.ExcelWriter(excel_output, mode='a', engine='openpyxl') as Excel_file:
+    #         obj.to_excel(Excel_file, sheet_name)
+    #     totaltime = time.time() - startime
+    #     print(f'It took {totaltime} seconds to complete')
+    # Keep this here becuase it's useful, not using it because it's slow.
+    # Doing this one sheet at time took over a minute during testing, while opening
+    # the excel file once and plugging in all components at once took about 5 seconds.
+    # Moral of the story: open a file and add to it a minimum number of times.
 
 def add_zip(directory, name, ziplist=zip_files):
     zip_path = write_pathname(directory, name)
